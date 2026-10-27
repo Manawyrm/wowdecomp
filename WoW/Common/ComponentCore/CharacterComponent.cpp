@@ -2,7 +2,11 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
-#include <intrin.h>
+#if defined(WOWDECOMP_ARCH_ARM64)
+#include <arm_neon.h>
+#else
+#include <emmintrin.h>
+#endif
 #include <new>
 #include <typeinfo>
 #if defined(_MSC_VER)
@@ -256,9 +260,150 @@ HTEXTURECACHE CCharacterComponent::LoadItemComponentTexture(const ItemDisplayInf
     return TextureCacheCreateTexture(s_path);
 }
 
+#if defined(WOWDECOMP_ARCH_ARM64)
+// rcpps / rsqrtps. The NEON estimates have ~8 bits, one Newton-Raphson step takes them past the ~12 bits of SSE.
+static inline float32x4_t CompressRcp(float32x4_t x) {
+    float32x4_t r = vrecpeq_f32(x);
+    return vmulq_f32(r, vrecpsq_f32(x, r));
+}
+
+static inline float32x4_t CompressRsqrt(float32x4_t x) {
+    float32x4_t r = vrsqrteq_f32(x);
+    return vmulq_f32(r, vrsqrtsq_f32(vmulq_f32(x, r), r));
+}
+
+// _mm_cmpneq_ps(zero, x) as a mask
+static inline uint32x4_t CompressNonZero(float32x4_t x) {
+    return vmvnq_u32(vceqq_f32(vdupq_n_f32(0.0f), x));
+}
+#endif
+
 // VERIFY: c2d32b47 manual
 // OFFSET: 0x004E7030
 static void CompressBlockSSE(const uint8_t* src, uint32_t stride, uint32_t* out) {
+#if defined(WOWDECOMP_ARCH_ARM64)
+    // NEON version of the SSE code below, same operation order (no fused multiply-add). Only rcpps/rsqrtps are
+    // approximations on both sides, so the endpoints can differ from x64 in rare rounding cases.
+    const float32x4_t scale = vdupq_n_f32(1.0f / 255.0f);
+
+    uint8x16_t row0 = vld1q_u8(src);
+    uint8x16_t row1 = vld1q_u8(src + stride);
+    uint8x16_t row2 = vld1q_u8(src + 2 * stride);
+    uint8x16_t row3 = vld1q_u8(src + 3 * stride);
+
+    uint16x8_t sum = vaddq_u16(vmovl_u8(vget_low_u8(row0)), vmovl_u8(vget_high_u8(row0)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_low_u8(row1)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_high_u8(row1)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_low_u8(row2)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_high_u8(row2)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_low_u8(row3)));
+    sum = vaddq_u16(sum, vmovl_u8(vget_high_u8(row3)));
+
+    uint16x8_t total = vshrq_n_u16(vaddq_u16(sum, vextq_u16(sum, sum, 4)), 4);
+    float32x4_t mean = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(total))), scale);
+
+    float32x4_t cov0 = vdupq_n_f32(0.0f);
+    float32x4_t cov1 = vdupq_n_f32(0.0f);
+    float32x4_t cov2 = vdupq_n_f32(0.0f);
+    const uint8_t* row = src;
+
+    for (int32_t y = 0; y < 4; y++, row += stride) {
+        uint8x16_t pixels = vld1q_u8(row);
+        uint16x8_t high = vmovl_u8(vget_high_u8(pixels));
+        uint16x8_t low = vmovl_u8(vget_low_u8(pixels));
+        float32x4_t d3 = vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(high))), scale), mean);
+        float32x4_t d2 = vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(high))), scale), mean);
+        float32x4_t d1 = vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(low))), scale), mean);
+        float32x4_t d0 = vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(low))), scale), mean);
+
+        cov0 = vaddq_f32(vaddq_f32(vaddq_f32(vaddq_f32(vmulq_f32(vdupq_laneq_f32(d3, 0), d3), cov0), vmulq_f32(vdupq_laneq_f32(d2, 0), d2)), vmulq_f32(vdupq_laneq_f32(d1, 0), d1)), vmulq_f32(vdupq_laneq_f32(d0, 0), d0));
+        cov1 = vaddq_f32(vaddq_f32(vaddq_f32(vaddq_f32(vmulq_f32(vdupq_laneq_f32(d3, 1), d3), cov1), vmulq_f32(vdupq_laneq_f32(d2, 1), d2)), vmulq_f32(vdupq_laneq_f32(d1, 1), d1)), vmulq_f32(vdupq_laneq_f32(d0, 1), d0));
+        cov2 = vaddq_f32(vaddq_f32(vaddq_f32(vaddq_f32(vmulq_f32(vdupq_laneq_f32(d3, 2), d3), cov2), vmulq_f32(vdupq_laneq_f32(d2, 2), d2)), vmulq_f32(vdupq_laneq_f32(d1, 2), d1)), vmulq_f32(vdupq_laneq_f32(d0, 2), d0));
+    }
+
+    float32x4_t axis = vdupq_n_f32(1.0f);
+
+    for (int32_t i = 0; i < 8; i++) {
+        float32x4_t next = vaddq_f32(vaddq_f32(vmulq_f32(vdupq_laneq_f32(axis, 2), cov2), vmulq_f32(vdupq_laneq_f32(axis, 1), cov1)), vmulq_f32(vdupq_laneq_f32(axis, 0), cov0));
+        float32x4_t largest = vmaxq_f32(next, vrev64q_f32(next));
+        largest = vmaxq_f32(largest, vextq_f32(largest, largest, 2));
+        axis = vmulq_f32(vreinterpretq_f32_u32(vandq_u32(CompressNonZero(largest), vreinterpretq_u32_f32(CompressRcp(largest)))), next);
+    }
+
+    float32x4_t length = vmulq_f32(axis, axis);
+    length = vaddq_f32(vrev64q_f32(length), length);
+    length = vaddq_f32(vextq_f32(length, length, 2), length);
+    axis = vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(vmulq_f32(CompressRsqrt(length), axis)), CompressNonZero(length)));
+
+    float32x4_t minProj = vsetq_lane_f32(1.0f, vdupq_n_f32(0.0f), 0);
+    float32x4_t maxProj = vsetq_lane_f32(-1.0f, vdupq_n_f32(0.0f), 0);
+    float32x4_t axisX = vdupq_laneq_f32(axis, 0);
+    float32x4_t axisY = vdupq_laneq_f32(axis, 1);
+    float32x4_t axisZ = vdupq_laneq_f32(axis, 2);
+    float32x4_t meanX = vdupq_laneq_f32(mean, 0);
+    float32x4_t meanY = vdupq_laneq_f32(mean, 1);
+    float32x4_t meanZ = vdupq_laneq_f32(mean, 2);
+    float32x4_t proj[4];
+
+    // 4x4 byte transpose: pixel-interleaved BGRA to one plane per channel (the SSE shuffle/unpack sequence)
+    static const uint8_t s_planarIndex[16] = { 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15 };
+    const uint8x16_t planarIndex = vld1q_u8(s_planarIndex);
+    row = src;
+
+    for (int32_t y = 0; y < 4; y++, row += stride) {
+        uint8x16_t planar = vqtbl1q_u8(vld1q_u8(row), planarIndex);
+        uint16x8_t channels = vmovl_u8(vget_low_u8(planar));
+        float32x4_t p = vaddq_f32(vmulq_f32(vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(channels))), scale), meanX), axisX), vmulq_f32(vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_high_u16(channels))), scale), meanY), axisY));
+        p = vaddq_f32(p, vmulq_f32(vsubq_f32(vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(vget_high_u8(planar))))), scale), meanZ), axisZ));
+        proj[y] = p;
+        minProj = vminq_f32(minProj, p);
+        maxProj = vmaxq_f32(maxProj, p);
+    }
+
+    minProj = vminq_f32(minProj, vrev64q_f32(minProj));
+    maxProj = vmaxq_f32(maxProj, vrev64q_f32(maxProj));
+    minProj = vminq_f32(minProj, vextq_f32(minProj, minProj, 2));
+    maxProj = vmaxq_f32(maxProj, vextq_f32(maxProj, maxProj, 2));
+
+    const float32x4_t k255 = vdupq_n_f32(255.0f);
+    int16x8_t endpoints = vcombine_s16(vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vaddq_f32(vmulq_f32(minProj, axis), mean), k255))), vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vaddq_f32(vmulq_f32(maxProj, axis), mean), k255))));
+    uint32x2_t endpointColors = vreinterpret_u32_u8(vqmovun_s16(endpoints));
+    uint32_t minColor = vget_lane_u32(endpointColors, 0);
+    uint32_t maxColor = vget_lane_u32(endpointColors, 1);
+    uint32_t color0 = ((maxColor & 0xF8) | (((maxColor & 0xFC00) | ((maxColor >> 3) & 0x1F0000)) >> 2)) >> 3;
+    uint32_t color1 = ((minColor & 0xF8) | (((minColor & 0xFC00) | ((minColor >> 3) & 0x1F0000)) >> 2)) >> 3;
+    uint32_t indices = 0;
+
+    if (color0 != color1) {
+        float32x4_t indexScale = vdivq_f32(vdupq_n_f32(3.0f), vsubq_f32(maxProj, minProj));
+        int16x8_t index01 = vcombine_s16(vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vsubq_f32(proj[0], minProj), indexScale))), vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vsubq_f32(proj[1], minProj), indexScale))));
+        int16x8_t index23 = vcombine_s16(vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vsubq_f32(proj[2], minProj), indexScale))), vqmovn_s32(vcvtnq_s32_f32(vmulq_f32(vsubq_f32(proj[3], minProj), indexScale))));
+        const int16x8_t one = vdupq_n_s16(1);
+        int16x8_t remap01 = vaddq_s16(index01, vreinterpretq_s16_u16(vshrq_n_u16(vreinterpretq_u16_s16(vaddq_s16(index01, one)), 1)));
+        int16x8_t remap23 = vaddq_s16(index23, vreinterpretq_s16_u16(vshrq_n_u16(vreinterpretq_u16_s16(vaddq_s16(index23, one)), 1)));
+        int32x4_t packed = vreinterpretq_s32_s8(vcombine_s8(vqmovn_s16(remap01), vqmovn_s16(remap23)));
+
+        int32_t bits0 = vgetq_lane_s32(packed, 0);
+        int32_t bits1 = vgetq_lane_s32(packed, 1);
+        int32_t bits2 = vgetq_lane_s32(packed, 2);
+        int32_t bits3 = vgetq_lane_s32(packed, 3);
+        int32_t result = (bits0 & 0x3) | (((bits0 & 0x300) | (((bits0 & 0x30000) | ((bits0 >> 6) & 0xC0000)) >> 6)) >> 6);
+        result |= (4 * ((bits1 & 0x300) | ((bits1 & 0x3) << 6))) | (((bits1 & 0x30000) | ((bits1 >> 6) & 0xC0000)) >> 4);
+        result |= (0xC00000 & (bits2 >> 2)) | (16 * ((bits2 & 0x30000) | (((bits2 & 0x300) | ((bits2 & 0x3) << 6)) << 6)));
+        result |= ((bits3 & static_cast<int32_t>(0xFF000000)) | (((bits3 & 0x30000) | (((bits3 & 0x300) | ((bits3 & 0x3) << 6)) << 6)) << 6)) << 6;
+        indices = result ^ 0x55555555;
+
+        if (color0 < color1) {
+            uint32_t swap = color0;
+            color0 = color1;
+            color1 = swap;
+            indices ^= 0x55555555;
+        }
+    }
+
+    out[0] = color0 | (color1 << 16);
+    out[1] = indices;
+#else
     const __m128i zero = _mm_setzero_si128();
     const __m128 scale = _mm_set1_ps(1.0f / 255.0f);
 
@@ -377,6 +522,7 @@ static void CompressBlockSSE(const uint8_t* src, uint32_t stride, uint32_t* out)
 
     out[0] = color0 | (color1 << 16);
     out[1] = indices;
+#endif
 }
 
 // VERIFY: 4cd9c152 manual

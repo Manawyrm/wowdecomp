@@ -77,7 +77,7 @@ int32_t IOsGetProcessorFeatures(CpuIdInfo* info) {
     memset(info, 0, sizeof(CpuIdInfo));
 
 #if defined(WOWDECOMP_ARCH_ARM64)
-    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 so the SSE code paths run (on MSVC soft intrinsics).
+    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 so the SSE code paths run (they have NEON implementations).
     info->m_maxStandard = 1;
     info->m_standard1d = 0x10 | 0x800000 | 0x2000000 | 0x4000000;
 

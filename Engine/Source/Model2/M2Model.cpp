@@ -5,7 +5,11 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <intrin.h>
+#if defined(WOWDECOMP_ARCH_ARM64)
+#include <arm_neon.h>
+#else
+#include <xmmintrin.h>
+#endif
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else
@@ -3182,6 +3186,45 @@ void CM2Model::TransformVertices_sse(CM2Model* model, M2SkinSection* section, ui
     M2Vertex* vertex = &model->m_shared->m_data->m_vertices[section->m_vertexStart];
     M2Vertex* end = vertex + section->m_vertexCount;
     float* out = reinterpret_cast<float*>(vertices);
+#if defined(WOWDECOMP_ARCH_ARM64)
+    // NEON version of the SSE code below, same operation order (no fused multiply-add).
+    float32x4_t row0 = vdupq_n_f32(0.0f);
+    float32x4_t row1 = vdupq_n_f32(0.0f);
+    float32x4_t row2 = vdupq_n_f32(0.0f);
+    float32x4_t row3 = vdupq_n_f32(0.0f);
+
+    while (vertex != end) {
+        if (static_cast<uint32_t>(vertex->m_weights) != weights || static_cast<uint32_t>(vertex->m_indices) != indices) {
+            weights = static_cast<uint32_t>(vertex->m_weights);
+            indices = static_cast<uint32_t>(vertex->m_indices);
+
+            float32x4_t weight = vdupq_n_f32(vertex->m_weights[0] * 0.0039215689f);
+            const float* bone = reinterpret_cast<const float*>(&bones[vertex->m_indices[0]]);
+            row0 = vmulq_f32(vld1q_f32(&bone[0]), weight);
+            row1 = vmulq_f32(vld1q_f32(&bone[4]), weight);
+            row2 = vmulq_f32(vld1q_f32(&bone[8]), weight);
+            row3 = vmulq_f32(vld1q_f32(&bone[12]), weight);
+
+            for (uint32_t i = 1; i < 4 && vertex->m_weights[i]; i++) {
+                weight = vdupq_n_f32(vertex->m_weights[i] * 0.0039215689f);
+                bone = reinterpret_cast<const float*>(&bones[vertex->m_indices[i]]);
+                row0 = vaddq_f32(row0, vmulq_f32(vld1q_f32(&bone[0]), weight));
+                row1 = vaddq_f32(row1, vmulq_f32(vld1q_f32(&bone[4]), weight));
+                row2 = vaddq_f32(row2, vmulq_f32(vld1q_f32(&bone[8]), weight));
+                row3 = vaddq_f32(row3, vmulq_f32(vld1q_f32(&bone[12]), weight));
+            }
+        }
+
+        float32x4_t normal = vaddq_f32(vaddq_f32(vmulq_f32(vdupq_n_f32(vertex->m_normal.x), row0), vmulq_f32(vdupq_n_f32(vertex->m_normal.y), row1)), vmulq_f32(vdupq_n_f32(vertex->m_normal.z), row2));
+        float32x4_t position = vaddq_f32(vaddq_f32(vaddq_f32(vmulq_f32(vdupq_n_f32(vertex->m_position.x), row0), vmulq_f32(vdupq_n_f32(vertex->m_position.y), row1)), vmulq_f32(vdupq_n_f32(vertex->m_position.z), row2)), row3);
+        vst1q_f32(&out[0], position);
+        vst1q_f32(&out[3], normal);
+        out[6] = vertex->m_texcoord[texCoord].x;
+        out[7] = vertex->m_texcoord[texCoord].y;
+        vertex++;
+        out += 8;
+    }
+#else
     __m128 row0;
     __m128 row1;
     __m128 row2;
@@ -3218,6 +3261,7 @@ void CM2Model::TransformVertices_sse(CM2Model* model, M2SkinSection* section, ui
         vertex++;
         out += 8;
     }
+#endif
 }
 
 // VERIFY: 9d870aa4 manual
@@ -3235,6 +3279,16 @@ void CM2Model::TransformVerticesOneBone_sse(CM2Model* model, M2SkinSection* sect
 
     for (; vertex < end; vertex++, out += 8) {
         const float* bone = reinterpret_cast<const float*>(&bones[vertex->m_indices.b[0]]);
+#if defined(WOWDECOMP_ARCH_ARM64)
+        // NEON version of the SSE code below, same operation order (no fused multiply-add).
+        float32x4_t row0 = vld1q_f32(&bone[0]);
+        float32x4_t row1 = vld1q_f32(&bone[4]);
+        float32x4_t row2 = vld1q_f32(&bone[8]);
+        float32x4_t position = vaddq_f32(vaddq_f32(vmulq_f32(row2, vdupq_n_f32(vertex->m_position.z)), vaddq_f32(vmulq_f32(row1, vdupq_n_f32(vertex->m_position.y)), vmulq_f32(row0, vdupq_n_f32(vertex->m_position.x)))), vld1q_f32(&bone[12]));
+        float32x4_t normal = vaddq_f32(vaddq_f32(vmulq_f32(row0, vdupq_n_f32(vertex->m_normal.x)), vmulq_f32(row1, vdupq_n_f32(vertex->m_normal.y))), vmulq_f32(vdupq_n_f32(vertex->m_normal.z), row2));
+        vst1q_f32(&out[0], position);
+        vst1q_f32(&out[3], normal);
+#else
         __m128 row0 = _mm_load_ps(&bone[0]);
         __m128 row1 = _mm_load_ps(&bone[4]);
         __m128 row2 = _mm_load_ps(&bone[8]);
@@ -3242,6 +3296,7 @@ void CM2Model::TransformVerticesOneBone_sse(CM2Model* model, M2SkinSection* sect
         __m128 normal = _mm_add_ps(_mm_add_ps(_mm_mul_ps(row0, _mm_set1_ps(vertex->m_normal.x)), _mm_mul_ps(row1, _mm_set1_ps(vertex->m_normal.y))), _mm_mul_ps(_mm_set1_ps(vertex->m_normal.z), row2));
         _mm_store_ps(&out[0], position);
         _mm_storeu_ps(&out[3], normal);
+#endif
         out[6] = vertex->m_texcoord[texCoord].x;
         out[7] = vertex->m_texcoord[texCoord].y;
     }

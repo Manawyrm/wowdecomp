@@ -1,7 +1,26 @@
 #include <cmath>
 #include <cstdint>
-#include <intrin.h>
+#if defined(WOWDECOMP_ARCH_ARM64)
+#include <arm_neon.h>
+#else
+#include <xmmintrin.h>
+#endif
 #include "Engine/Source/ComSat/SPIRIT/ipmr.h"
+
+// cvtss2si: round to nearest even; out of range and NaN give INT32_MIN like x86 (NEON would saturate).
+static inline int32_t SpiritRoundToInt(float x) {
+#if defined(WOWDECOMP_ARCH_ARM64)
+    int64_t value = vcvtnd_s64_f64(static_cast<double>(x));
+
+    if (x != x || value != static_cast<int32_t>(value)) {
+        return INT32_MIN;
+    }
+
+    return static_cast<int32_t>(value);
+#else
+    return _mm_cvtss_si32(_mm_set_ss(x));
+#endif
+}
 
 extern "C" {
 
@@ -337,7 +356,7 @@ void SPIRIT_IP_MR_V3_NAME_200(const float* src, int16_t* pcm, int16_t count) {
     int32_t blocks = count / 4;
 
     for (int32_t i = 0; i < blocks * 4; i++) {
-        int32_t value = _mm_cvtss_si32(_mm_set_ss(src[i]));
+        int32_t value = SpiritRoundToInt(src[i]);
 
         if (value > 32767) {
             value = 32767;

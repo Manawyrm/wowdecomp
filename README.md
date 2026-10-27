@@ -65,9 +65,8 @@ cmake -S . -B build/arm64 -G "Visual Studio 17 2022" -A ARM64
 cmake --build build/arm64 --config Release --target WowClient --parallel
 ```
 
-ARM64 builds on the x64 sources. Current limitations: SSE code runs on MSVC soft intrinsics (`softintrin.lib`)
-until native NEON paths exist, movies are disabled (no ARM64 movie decoder yet), and NVIDIA 3D Vision (NVAPI) is
-stubbed out.
+ARM64 builds on the x64 sources; the SSE code paths have NEON implementations next to them. Current limitations:
+movies are disabled (no ARM64 movie decoder yet) and NVIDIA 3D Vision (NVAPI) is stubbed out.
 
 In-source builds are refused, so keep the build directory separate (`build/` above).
 

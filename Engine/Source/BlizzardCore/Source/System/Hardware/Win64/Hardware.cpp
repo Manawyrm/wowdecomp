@@ -21,7 +21,7 @@ bool System_Hardware::ReadCPUID(CPUIDInfo* info) {
     memset(info, sizeof(info), 0);
 
 #if defined(WOWDECOMP_ARCH_ARM64)
-    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 like Os does (the SSE code runs on MSVC soft intrinsics).
+    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 like Os does (the SSE code paths have NEON implementations).
     memset(info, 0, sizeof(*info));
     info->m_maxLeaf = 1;
     info->m_maxExtLeaf = 0x80000001;

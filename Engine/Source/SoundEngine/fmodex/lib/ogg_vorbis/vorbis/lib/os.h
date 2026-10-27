@@ -237,13 +237,19 @@ static __inline void FMOD_vorbis_fpu_restore(vorbis_fpu_control fpu){
 typedef ogg_int16_t vorbis_fpu_control;
 
 #if defined(_M_ARM64)
-#include <intrin.h> /* SSE2 through MSVC soft intrinsics */
+#include <arm_neon.h>
+/* cvtsd2si on NEON: round to nearest even, out of range and NaN give INT_MIN like x86 */
+static __inline int FMOD_vorbis_ftoi(double f){
+        __int64 i = vcvtnd_s64_f64(f);
+        if (f != f || i != (int)i) return (int)0x80000000;
+        return (int)i;
+}
 #else
 #include <emmintrin.h>
-#endif
 static __inline int FMOD_vorbis_ftoi(double f){
         return _mm_cvtsd_si32(_mm_load_sd(&f));
 }
+#endif
 
 static __inline void FMOD_vorbis_fpu_setround(vorbis_fpu_control *fpu){
 }

@@ -26,9 +26,6 @@ if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     if (MSVC AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
         set(WOWDECOMP_ARCH_ARM64 1)
         add_compile_definitions(WOWDECOMP_ARCH_ARM64=1)
-        # SSE intrinsics are emulated through MSVC soft intrinsics (<intrin.h> + softintrin.lib) until native NEON paths exist.
-        add_compile_definitions(USE_SOFT_INTRINSICS)
-        link_libraries(softintrin ntdll)
         # Acquire/release semantics for volatile accesses, matching the x86 memory ordering the decompiled code assumes.
         add_compile_options(/volatile:ms)
     endif ()

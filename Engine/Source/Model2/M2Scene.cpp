@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <intrin.h>
+#if defined(WOWDECOMP_ARCH_ARM64)
+#include <arm_neon.h>
+#else
+#include <xmmintrin.h>
+#endif
 #include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
@@ -372,6 +376,34 @@ uint32_t CM2Scene::SphereTestModels(const C3Vector& start, const C3Vector& dir, 
 // VERIFY: d49fadc9 manual
 // OFFSET: 0x0081D2C0
 void M2BlendBoneMatricesSSE(const C44Matrix* bones, ubyte4 weights, ubyte4 indices, C44Matrix* result) {
+#if defined(WOWDECOMP_ARCH_ARM64)
+    // NEON version of the SSE code below, same operation order (no fused multiply-add).
+    const float* bone = reinterpret_cast<const float*>(&bones[indices.b[0]]);
+    float32x4_t weight = vdupq_n_f32(weights.b[0] * 0.0039215689f);
+    float32x4_t row0 = vmulq_f32(vld1q_f32(&bone[0]), weight);
+    float32x4_t row1 = vmulq_f32(vld1q_f32(&bone[4]), weight);
+    float32x4_t row2 = vmulq_f32(vld1q_f32(&bone[8]), weight);
+    float32x4_t row3 = vmulq_f32(vld1q_f32(&bone[12]), weight);
+
+    for (uint32_t i = 1; i < 4; i++) {
+        if (!weights.b[i]) {
+            break;
+        }
+
+        bone = reinterpret_cast<const float*>(&bones[indices.b[i]]);
+        weight = vdupq_n_f32(weights.b[i] * 0.0039215689f);
+        row0 = vaddq_f32(vmulq_f32(vld1q_f32(&bone[0]), weight), row0);
+        row1 = vaddq_f32(vmulq_f32(vld1q_f32(&bone[4]), weight), row1);
+        row2 = vaddq_f32(vmulq_f32(vld1q_f32(&bone[8]), weight), row2);
+        row3 = vaddq_f32(vmulq_f32(vld1q_f32(&bone[12]), weight), row3);
+    }
+
+    float* out = reinterpret_cast<float*>(result);
+    vst1q_f32(&out[0], row0);
+    vst1q_f32(&out[4], row1);
+    vst1q_f32(&out[8], row2);
+    vst1q_f32(&out[12], row3);
+#else
     const float* bone = reinterpret_cast<const float*>(&bones[indices.b[0]]);
     __m128 weight = _mm_set1_ps(weights.b[0] * 0.0039215689f);
     __m128 row0 = _mm_mul_ps(_mm_loadu_ps(&bone[0]), weight);
@@ -397,6 +429,7 @@ void M2BlendBoneMatricesSSE(const C44Matrix* bones, ubyte4 weights, ubyte4 indic
     _mm_storeu_ps(&out[4], row1);
     _mm_storeu_ps(&out[8], row2);
     _mm_storeu_ps(&out[12], row3);
+#endif
     result->a3 = 0.0f;
     result->b3 = 0.0f;
     result->c3 = 0.0f;
