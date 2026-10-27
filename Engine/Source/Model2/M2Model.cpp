@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <xmmintrin.h>
+#include <intrin.h>
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else

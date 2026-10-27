@@ -76,6 +76,13 @@ static const char s_vendorIds[] = "GenuineIntel" "AuthenticAMD" "CyrixInstead" "
 int32_t IOsGetProcessorFeatures(CpuIdInfo* info) {
     memset(info, 0, sizeof(CpuIdInfo));
 
+#if defined(WOWDECOMP_ARCH_ARM64)
+    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 so the SSE code paths run (on MSVC soft intrinsics).
+    info->m_maxStandard = 1;
+    info->m_standard1d = 0x10 | 0x800000 | 0x2000000 | 0x4000000;
+
+    return 1;
+#else
     int32_t result = 0;
     uint32_t maxStandard = 0;
     uint32_t maxExtended = 0;
@@ -139,6 +146,7 @@ int32_t IOsGetProcessorFeatures(CpuIdInfo* info) {
     }
 
     return result;
+#endif
 }
 
 // OFFSET: 0x0086B0C0

@@ -8,7 +8,9 @@ endif ()
 
 add_executable(Wow WIN32 ${PRIVATE_SOURCES} ${PLATFORM_SOURCES})
 
-if (WOWDECOMP_ARCH_64)
+if (WOWDECOMP_ARCH_ARM64)
+    set(WOW_OUTPUT_NAME WowArm64)
+elseif (WOWDECOMP_ARCH_64)
     set(WOW_OUTPUT_NAME Wow64)
 else ()
     set(WOW_OUTPUT_NAME Wow32)

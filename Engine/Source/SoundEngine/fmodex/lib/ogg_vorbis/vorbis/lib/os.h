@@ -236,7 +236,11 @@ static __inline void FMOD_vorbis_fpu_restore(vorbis_fpu_control fpu){
 
 typedef ogg_int16_t vorbis_fpu_control;
 
+#if defined(_M_ARM64)
+#include <intrin.h> /* SSE2 through MSVC soft intrinsics */
+#else
 #include <emmintrin.h>
+#endif
 static __inline int FMOD_vorbis_ftoi(double f){
         return _mm_cvtsd_si32(_mm_load_sd(&f));
 }

@@ -59,16 +59,24 @@ cmake --build build/x64 --config Release --target WowClient --parallel
 # Win32 (optional, needs NASM)
 cmake -S . -B build/win32 -G "Visual Studio 17 2022" -A Win32
 cmake --build build/win32 --config Release --target WowClient --parallel
+
+# ARM64 (Windows on ARM, native)
+cmake -S . -B build/arm64 -G "Visual Studio 17 2022" -A ARM64
+cmake --build build/arm64 --config Release --target WowClient --parallel
 ```
+
+ARM64 builds on the x64 sources. Current limitations: SSE code runs on MSVC soft intrinsics (`softintrin.lib`)
+until native NEON paths exist, movies are disabled (no ARM64 movie decoder yet), and NVIDIA 3D Vision (NVAPI) is
+stubbed out.
 
 In-source builds are refused, so keep the build directory separate (`build/` above).
 
 The client is written to `bin/Win/`:
 
-| Target | x64 | Win32 |
-|---|---|---|
-| `WowClient` | `WowClient64.exe` | `WowClient32.exe` |
-| `Wow` | `Wow64.exe` | `Wow32.exe` |
+| Target | x64 | Win32 | ARM64 |
+|---|---|---|---|
+| `WowClient` | `WowClient64.exe` | `WowClient32.exe` | `WowClientArm64.exe` |
+| `Wow` | `Wow64.exe` | `Wow32.exe` | `WowArm64.exe` |
 
 `WowClient` is the client with a crash logger: it opens a console window and writes
 `WowClient_crash.log` when the client crashes. `Wow` is the same client without it. You can also turn the

@@ -939,7 +939,12 @@ static LONG WINAPI ExceptionFilterWin32(EXCEPTION_POINTERS* exceptionpointers) {
 
     __try {
         GetExceptionNameWin32(record->ExceptionCode, exceptionname, sizeof(exceptionname));
+#if defined(WOWDECOMP_ARCH_ARM64)
+        // No code segment register on ARM64.
+        SStrPrintf(buffer, sizeof(buffer), "0x%p (%s) at %04X:%p", reinterpret_cast<void*>(static_cast<uintptr_t>(record->ExceptionCode)), exceptionname, 0, record->ExceptionAddress);
+#else
         SStrPrintf(buffer, sizeof(buffer), "0x%p (%s) at %04X:%p", reinterpret_cast<void*>(static_cast<uintptr_t>(record->ExceptionCode)), exceptionname, exceptionpointers->ContextRecord->SegCs, record->ExceptionAddress);
+#endif
 
         if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters == 2) {
             char format[256];

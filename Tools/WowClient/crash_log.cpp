@@ -38,17 +38,23 @@ static void ModuleOffset(void* address, char* out, size_t size) {
     }
 }
 
+#if defined(_M_ARM64)
+#define FRAME_PC Pc
+#else
+#define FRAME_PC Rip
+#endif
+
 static void LogStack(CONTEXT* context) {
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(_M_ARM64)
     HANDLE process = GetCurrentProcess();
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     SymInitialize(process, nullptr, TRUE);
 
     CONTEXT frame = *context;
 
-    for (int depth = 0; depth < 24 && frame.Rip; depth++) {
+    for (int depth = 0; depth < 24 && frame.FRAME_PC; depth++) {
         char where[MAX_PATH + 32];
-        ModuleOffset(reinterpret_cast<void*>(frame.Rip), where, sizeof(where));
+        ModuleOffset(reinterpret_cast<void*>(frame.FRAME_PC), where, sizeof(where));
 
         char buffer[sizeof(SYMBOL_INFO) + 256] = {};
         SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
@@ -62,8 +68,8 @@ static void LogStack(CONTEXT* context) {
 
         char line[1024];
 
-        if (SymFromAddr(process, frame.Rip, &displacement, symbol)) {
-            if (SymGetLineFromAddr64(process, frame.Rip, &lineDisplacement, &source)) {
+        if (SymFromAddr(process, frame.FRAME_PC, &displacement, symbol)) {
+            if (SymGetLineFromAddr64(process, frame.FRAME_PC, &lineDisplacement, &source)) {
                 _snprintf_s(line, sizeof(line), _TRUNCATE, "  #%02d %s %s+0x%llX (%s:%lu)\n", depth, where, symbol->Name, static_cast<unsigned long long>(displacement), source.FileName, source.LineNumber);
             } else {
                 _snprintf_s(line, sizeof(line), _TRUNCATE, "  #%02d %s %s+0x%llX\n", depth, where, symbol->Name, static_cast<unsigned long long>(displacement));
@@ -75,17 +81,26 @@ static void LogStack(CONTEXT* context) {
         LogLine(line);
 
         DWORD64 imageBase = 0;
-        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(frame.Rip, &imageBase, nullptr);
+        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(frame.FRAME_PC, &imageBase, nullptr);
 
         if (!function) {
+#if defined(_M_ARM64)
+            // Leaf function without unwind data: the return address is still in LR.
+            if (frame.Pc == frame.Lr) {
+                break;
+            }
+
+            frame.Pc = frame.Lr;
+#else
             frame.Rip = *reinterpret_cast<DWORD64*>(frame.Rsp);
             frame.Rsp += 8;
+#endif
             continue;
         }
 
         void* handlerData = nullptr;
         DWORD64 establisher = 0;
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, frame.Rip, function, &frame, &handlerData, &establisher, nullptr);
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, frame.FRAME_PC, function, &frame, &handlerData, &establisher, nullptr);
     }
 #endif
 }

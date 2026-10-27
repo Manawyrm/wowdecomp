@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
-#include <emmintrin.h>
+#include <intrin.h>
 #include <new>
 #include <typeinfo>
 #if defined(_MSC_VER)

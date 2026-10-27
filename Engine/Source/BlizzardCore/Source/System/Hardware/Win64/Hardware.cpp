@@ -19,6 +19,16 @@ Blizzard::Lock::Atomic System_Hardware::s_initCount;
 // OFFSET: 0x0042E120
 bool System_Hardware::ReadCPUID(CPUIDInfo* info) {
     memset(info, sizeof(info), 0);
+
+#if defined(WOWDECOMP_ARCH_ARM64)
+    // ARM64 has no CPUID. Report TSC, MMX, SSE and SSE2 like Os does (the SSE code runs on MSVC soft intrinsics).
+    memset(info, 0, sizeof(*info));
+    info->m_maxLeaf = 1;
+    info->m_maxExtLeaf = 0x80000001;
+    info->m_leaf1Edx = 0x10 | 0x800000 | 0x2000000 | 0x4000000;
+
+    return true;
+#else
     bool result = false;
     uint32_t maxLeaf = 0;
     uint32_t maxExtLeaf = 0;
@@ -77,6 +87,7 @@ bool System_Hardware::ReadCPUID(CPUIDInfo* info) {
     info->m_ext1Ecx = regs[2];
 
     return result;
+#endif
 }
 
 // OFFSET: 0x00432D90

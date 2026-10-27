@@ -59,7 +59,18 @@ if (WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/nvapi
     )
 
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    if (WOWDECOMP_ARCH_ARM64)
+        add_library(nvapi_stub STATIC
+            nvapi/nvapi_stub_arm64.cpp
+        )
+
+        target_include_directories(nvapi_stub
+            PRIVATE
+                ${CMAKE_SOURCE_DIR}
+        )
+
+        target_link_libraries(nvapi INTERFACE nvapi_stub)
+    elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
         target_link_libraries(nvapi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/nvapi/amd64/nvapi64.lib)
     else ()
         target_link_libraries(nvapi INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/nvapi/x86/nvapi.lib)
@@ -168,6 +179,20 @@ if (WOWDECOMP_ARCH_32)
     else ()
         message(WARNING "DivxDecoder: ${DIVXDECODER_DLL} is missing. Copy DivxDecoder.dll from a 3.3.5a (12340) client there; Win32 builds need it next to the executables.")
     endif ()
+elseif (WOWDECOMP_ARCH_ARM64)
+    add_library(DivxDecoderStub STATIC
+        DivxDecoder/DivxDecoderStub.cpp
+    )
+
+    target_include_directories(DivxDecoderStub
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}
+    )
+
+    target_link_libraries(DivxDecoder
+        INTERFACE
+            DivxDecoderStub
+    )
 else ()
     target_link_libraries(DivxDecoder
         INTERFACE
